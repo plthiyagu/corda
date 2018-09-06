@@ -42,6 +42,7 @@ import net.corda.node.services.config.VerifierType
 import net.corda.node.services.identity.PersistentIdentityService
 import net.corda.node.services.keys.E2ETestKeyManagementService
 import net.corda.node.services.keys.KeyManagementServiceInternal
+import net.corda.node.services.keys.cryptoServices.BCCryptoService
 import net.corda.node.services.messaging.Message
 import net.corda.node.services.messaging.MessagingService
 import net.corda.node.services.persistence.NodeAttachmentService
@@ -50,6 +51,7 @@ import net.corda.node.utilities.AffinityExecutor.ServiceAffinityExecutor
 import net.corda.node.utilities.DefaultNamedCacheFactory
 import net.corda.nodeapi.internal.DevIdentityGenerator
 import net.corda.nodeapi.internal.config.User
+import net.corda.nodeapi.internal.crypto.X509Utilities
 import net.corda.nodeapi.internal.network.NetworkParametersCopier
 import net.corda.nodeapi.internal.persistence.CordaPersistence
 import net.corda.nodeapi.internal.persistence.DatabaseConfig
@@ -69,6 +71,7 @@ import java.math.BigInteger
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.KeyPair
+import java.security.PublicKey
 import java.time.Clock
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -381,7 +384,7 @@ open class InternalMockNetwork(defaultParameters: MockNetworkParameters = MockNe
         }
 
         override fun makeKeyManagementService(identityService: PersistentIdentityService): KeyManagementServiceInternal {
-            return E2ETestKeyManagementService(identityService)
+            return E2ETestKeyManagementService(identityService, cryptoService)
         }
 
         override fun startShell() {
@@ -389,10 +392,13 @@ open class InternalMockNetwork(defaultParameters: MockNetworkParameters = MockNe
         }
 
         // This is not thread safe, but node construction is done on a single thread, so that should always be fine
-        override fun generateKeyPair(): KeyPair {
+        override fun generateKeyPair(alias: String): PublicKey {
+            require(cryptoService is BCCryptoService) { "MockNode supports BCCryptoService only, but it is ${cryptoService.javaClass.name}" }
             counter = counter.add(BigInteger.ONE)
             // The StartedMockNode specifically uses EdDSA keys as they are fixed and stored in json files for some tests (e.g IRSSimulation).
-            return Crypto.deriveKeyPairFromEntropy(Crypto.EDDSA_ED25519_SHA512, counter)
+            val keyPair = Crypto.deriveKeyPairFromEntropy(Crypto.EDDSA_ED25519_SHA512, counter)
+            (cryptoService as BCCryptoService).importKey(alias, keyPair)
+            return keyPair.public
         }
 
         // NodeInfo requires a non-empty addresses list and so we give it a dummy value for mock nodes.
@@ -590,6 +596,8 @@ private fun mockNodeConfiguration(certificatesDirectory: Path): NodeConfiguratio
         doReturn(FlowTimeoutConfiguration(1.hours, 3, backoffBase = 1.0)).whenever(it).flowTimeout
         doReturn(5.seconds.toMillis()).whenever(it).additionalNodeInfoPollingFrequencyMsec
         doReturn(null).whenever(it).devModeOptions
+        doReturn(null).whenever(it).cryptoServiceName
+        doReturn(null).whenever(it).cryptoServiceConf
     }
 }
 
