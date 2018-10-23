@@ -8,6 +8,7 @@ import net.corda.core.cordapp.CordappProvider
 import net.corda.core.crypto.*
 import net.corda.core.identity.Party
 import net.corda.core.internal.FlowStateMachine
+import net.corda.core.internal.StatePointerSearch
 import net.corda.core.internal.ensureMinimumPlatformVersion
 import net.corda.core.node.NetworkParameters
 import net.corda.core.node.ServiceHub
@@ -17,10 +18,12 @@ import net.corda.core.node.services.AttachmentId
 import net.corda.core.node.services.KeyManagementService
 import net.corda.core.serialization.SerializationContext
 import net.corda.core.serialization.SerializationFactory
+import java.lang.reflect.Field
 import java.security.PublicKey
 import java.time.Duration
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import kotlin.collections.ArrayList
 
 /**
@@ -207,6 +210,21 @@ open class TransactionBuilder @JvmOverloads constructor(
     private fun checkReferencesUseSameNotary() = referencesWithTransactionState.map { it.notary }.toSet().size == 1
 
     /**
+     * If called outside the context of a flow a [ServiceHub] instance must be passed to this method for it to be
+     * able to resolve [StatePointer]s.
+     */
+    private fun resolveStatePointers(state: ContractState, serviceHub: ServiceHub? = (Strand.currentStrand() as? FlowStateMachine<*>)?.serviceHub) {
+        if (serviceHub == null) {
+            return
+        } else {
+            StatePointerSearch(state).search().forEach { statePointer ->
+                val resolvedStatePointer: StateAndRef<*> = statePointer.resolve(serviceHub)
+                addReferenceState(resolvedStatePointer.referenced())
+            }
+        }
+    }
+
+    /**
      * Adds a reference input [StateRef] to the transaction.
      *
      * Note: Reference states are only supported on Corda networks running a minimum platform version of 4.
@@ -239,10 +257,14 @@ open class TransactionBuilder @JvmOverloads constructor(
     }
 
     /** Adds an input [StateRef] to the transaction. */
-    open fun addInputState(stateAndRef: StateAndRef<*>): TransactionBuilder {
+    @JvmOverloads
+    open fun addInputState(stateAndRef: StateAndRef<*>, resolveStatePointers: Boolean = false): TransactionBuilder {
         checkNotary(stateAndRef)
         inputs.add(stateAndRef.ref)
         inputsWithTransactionState.add(stateAndRef.state)
+        if (resolveStatePointers) {
+            resolveStatePointers(stateAndRef.state.data)
+        }
         return this
     }
 
@@ -253,8 +275,12 @@ open class TransactionBuilder @JvmOverloads constructor(
     }
 
     /** Adds an output state to the transaction. */
-    fun addOutputState(state: TransactionState<*>): TransactionBuilder {
+    @JvmOverloads
+    fun addOutputState(state: TransactionState<*>, resolveStatePointers: Boolean = false): TransactionBuilder {
         outputs.add(state)
+        if (resolveStatePointers) {
+            resolveStatePointers(state.data)
+        }
         return this
     }
 
@@ -264,21 +290,23 @@ open class TransactionBuilder @JvmOverloads constructor(
             state: ContractState,
             contract: ContractClassName,
             notary: Party, encumbrance: Int? = null,
-            constraint: AttachmentConstraint = AutomaticHashConstraint
+            constraint: AttachmentConstraint = AutomaticHashConstraint,
+            resolveStatePointers: Boolean = false
     ): TransactionBuilder {
-        return addOutputState(TransactionState(state, contract, notary, encumbrance, constraint))
+        return addOutputState(TransactionState(state, contract, notary, encumbrance, constraint), resolveStatePointers)
     }
 
     /** A default notary must be specified during builder construction to use this method */
     @JvmOverloads
     fun addOutputState(
             state: ContractState, contract: ContractClassName,
-            constraint: AttachmentConstraint = AutomaticHashConstraint
+            constraint: AttachmentConstraint = AutomaticHashConstraint,
+            resolveStatePointers: Boolean = false
     ): TransactionBuilder {
         checkNotNull(notary) {
             "Need to specify a notary for the state, or set a default one on TransactionBuilder initialisation"
         }
-        addOutputState(state, contract, notary!!, constraint = constraint)
+        addOutputState(state, contract, notary!!, constraint = constraint, resolveStatePointers = resolveStatePointers)
         return this
     }
 
