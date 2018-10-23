@@ -216,3 +216,10 @@ a look-up. There are two types of pointers; linear and static.
 * The node calling `resolve` for a `LinearPointer` may have seen and stored transactions containing a `LinearState` with
   the specified `linearId`. However, there is no guarantee the `StateAndRef<T>` returned by `resolve` is the most recent
   version of the `LinearState`. The node only returns the most recent version that _it_ is aware of.
+
+**Resolving state pointers in `TransactionBuilder`**
+
+When building transactions, any `StatePointer` s contained within inputs or outputs added to a `TransactionBuilder` can
+be optionally resolved to reference states using the `resolveStatePointers` method. The effect is that the pointed to
+data is carried along with the transaction. This may or may not be appropriate in all circumstances, which is why
+calling the method is optional.

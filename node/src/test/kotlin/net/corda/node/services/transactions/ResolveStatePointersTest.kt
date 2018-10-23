@@ -1,20 +1,19 @@
 package net.corda.node.services.transactions
 
-import com.nhaarman.mockito_kotlin.whenever
 import net.corda.core.contracts.*
 import net.corda.core.identity.AbstractParty
 import net.corda.core.identity.CordaX500Name
 import net.corda.core.transactions.TransactionBuilder
-import net.corda.node.services.api.IdentityServiceInternal
+import net.corda.testing.common.internal.testNetworkParameters
 import net.corda.testing.contracts.DummyContract
 import net.corda.testing.core.DUMMY_NOTARY_NAME
 import net.corda.testing.core.SerializationEnvironmentRule
 import net.corda.testing.core.TestIdentity
-import net.corda.testing.internal.rigorousMock
 import net.corda.testing.node.MockServices
+import net.corda.testing.node.makeTestIdentityService
 import org.junit.Rule
 import org.junit.Test
-import org.mockito.Mockito
+import kotlin.test.assertEquals
 
 class ResolveStatePointersTest {
 
@@ -25,47 +24,49 @@ class ResolveStatePointersTest {
     @JvmField
     val testSerialization = SerializationEnvironmentRule()
 
-    private val mockIdentityService = rigorousMock<IdentityServiceInternal>().also {
-        Mockito.doReturn(myself.party).whenever(it).partyFromKey(myself.publicKey)
-        Mockito.doReturn(notary.party).whenever(it).partyFromKey(notary.publicKey)
-        Mockito.doReturn(myself.party).whenever(it).wellKnownPartyFromAnonymous(myself.party)
-        Mockito.doReturn(notary.party).whenever(it).wellKnownPartyFromAnonymous(notary.party)
-        Mockito.doReturn(myself.party).whenever(it).wellKnownPartyFromX500Name(myself.name)
-        Mockito.doReturn(notary.party).whenever(it).wellKnownPartyFromX500Name(notary.name)
-    }
-
-    val myself = TestIdentity(CordaX500Name("Me", "London", "GB"))
-    val notary = TestIdentity(DUMMY_NOTARY_NAME, 20)
-    val cordapps = listOf("net.corda.testing.contracts")
-    val databaseAndServices = MockServices.makeTestDatabaseAndMockServices(
-            cordapps,
-            mockIdentityService,
-            myself
+    private val myself = TestIdentity(CordaX500Name("Me", "London", "GB"))
+    private val notary = TestIdentity(DUMMY_NOTARY_NAME, 20)
+    private val cordapps = listOf("net.corda.testing.contracts")
+    private val databaseAndServices = MockServices.makeTestDatabaseAndMockServices(
+            cordappPackages = cordapps,
+            identityService = makeTestIdentityService(notary.identity, myself.identity),
+            initialIdentity = myself,
+            networkParameters = testNetworkParameters(minimumPlatformVersion = 4)
     )
 
-    val database = databaseAndServices.first
-    val services = databaseAndServices.second
+    private val database = databaseAndServices.first
+    private val services = databaseAndServices.second
 
     @Test
-    fun `test`() {
+    fun `resolve state pointers and check reference state is added to transaction`() {
+        val bar = Bar(listOf(myself.party))
+
         // Create the pointed to state.
-        val linearId = services.run {
+        val stateAndRef = services.run {
             val tx = signInitialTransaction(TransactionBuilder(notary = notary.party).apply {
-                addOutputState(Bar(listOf(myself.party)), DummyContract.PROGRAM_ID)
+                addOutputState(bar, DummyContract.PROGRAM_ID)
                 addCommand(Command(DummyContract.Commands.Create(), myself.party.owningKey))
             })
             recordTransactions(listOf(tx))
-            tx.tx.outputsOfType<LinearState>().single().linearId
+            tx.tx.outRefsOfType<LinearState>().single()
         }
 
+        val linearId = stateAndRef.state.data.linearId
+
+        // Add a new state containing a linear pointer.
         val tx = TransactionBuilder(notary = notary.party).apply {
             val pointer = LinearPointer(linearId)
-            addOutputState(Foo(pointer, listOf(myself.party)), DummyContract.PROGRAM_ID, resolveStatePointers = true)
+            addOutputState(Foo(pointer, listOf(myself.party)), DummyContract.PROGRAM_ID)
             addCommand(Command(DummyContract.Commands.Create(), myself.party.owningKey))
+            resolveStatePointers(services)
         }
 
-        println(tx)
+        // Check the StateRef for the pointed-to state is added as a reference.
+        assertEquals(stateAndRef.ref, tx.referenceStates().single())
 
+        // Resolve the StateRef to the actual state.
+        val ltx = tx.toLedgerTransaction(services)
+        assertEquals(bar, ltx.referenceStates.single())
     }
 
 }

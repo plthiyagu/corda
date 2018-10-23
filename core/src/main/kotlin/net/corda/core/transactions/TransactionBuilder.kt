@@ -210,16 +210,29 @@ open class TransactionBuilder @JvmOverloads constructor(
     private fun checkReferencesUseSameNotary() = referencesWithTransactionState.map { it.notary }.toSet().size == 1
 
     /**
-     * If called outside the context of a flow a [ServiceHub] instance must be passed to this method for it to be
-     * able to resolve [StatePointer]s.
+     * If any inputs or outputs added to the [TransactionBuilder] contain [StatePointer]s, then this method can be
+     * optionally called to resolve those [StatePointer]s to [StateAndRef]s. The [StateAndRef]s are then added as
+     * reference states to the transaction. The effect is that the referenced data is carried along with the
+     * transaction. This may or may not be appropriate in all circumstances, which is why calling this method is
+     * optional.
+     *
+     * If this method is called outside the context of a flow, a [ServiceHub] instance must be passed to this method
+     * for it to be able to resolve [StatePointer]s. Usually for a unit test, this will be an instance of mock services.
+     *
+     * @throws IllegalStateException if no [ServiceHub] is provided and no flow context is available.
      */
-    private fun resolveStatePointers(state: ContractState, serviceHub: ServiceHub? = (Strand.currentStrand() as? FlowStateMachine<*>)?.serviceHub) {
+    fun resolveStatePointers(serviceHub: ServiceHub? = (Strand.currentStrand() as? FlowStateMachine<*>)?.serviceHub) {
         if (serviceHub == null) {
-            return
+            throw IllegalStateException("You must pass in a ServiceHub reference to resolve state pointers outside " +
+                    "flows. If you are writing a unit test then pass in a MockServices instance.")
         } else {
-            StatePointerSearch(state).search().forEach { statePointer ->
-                val resolvedStatePointer: StateAndRef<*> = statePointer.resolve(serviceHub)
-                addReferenceState(resolvedStatePointer.referenced())
+            val transactionStates = outputStates() + inputsWithTransactionState
+            val contractStates = transactionStates.map { it.data }
+            contractStates.forEach { state ->
+                StatePointerSearch(state).search().forEach { statePointer ->
+                    val resolvedStatePointer: StateAndRef<*> = statePointer.resolve(serviceHub)
+                    addReferenceState(resolvedStatePointer.referenced())
+                }
             }
         }
     }
@@ -257,14 +270,10 @@ open class TransactionBuilder @JvmOverloads constructor(
     }
 
     /** Adds an input [StateRef] to the transaction. */
-    @JvmOverloads
-    open fun addInputState(stateAndRef: StateAndRef<*>, resolveStatePointers: Boolean = false): TransactionBuilder {
+    open fun addInputState(stateAndRef: StateAndRef<*>): TransactionBuilder {
         checkNotary(stateAndRef)
         inputs.add(stateAndRef.ref)
         inputsWithTransactionState.add(stateAndRef.state)
-        if (resolveStatePointers) {
-            resolveStatePointers(stateAndRef.state.data)
-        }
         return this
     }
 
@@ -275,12 +284,8 @@ open class TransactionBuilder @JvmOverloads constructor(
     }
 
     /** Adds an output state to the transaction. */
-    @JvmOverloads
-    fun addOutputState(state: TransactionState<*>, resolveStatePointers: Boolean = false): TransactionBuilder {
+    fun addOutputState(state: TransactionState<*>): TransactionBuilder {
         outputs.add(state)
-        if (resolveStatePointers) {
-            resolveStatePointers(state.data)
-        }
         return this
     }
 
@@ -290,23 +295,21 @@ open class TransactionBuilder @JvmOverloads constructor(
             state: ContractState,
             contract: ContractClassName,
             notary: Party, encumbrance: Int? = null,
-            constraint: AttachmentConstraint = AutomaticHashConstraint,
-            resolveStatePointers: Boolean = false
+            constraint: AttachmentConstraint = AutomaticHashConstraint
     ): TransactionBuilder {
-        return addOutputState(TransactionState(state, contract, notary, encumbrance, constraint), resolveStatePointers)
+        return addOutputState(TransactionState(state, contract, notary, encumbrance, constraint))
     }
 
     /** A default notary must be specified during builder construction to use this method */
     @JvmOverloads
     fun addOutputState(
             state: ContractState, contract: ContractClassName,
-            constraint: AttachmentConstraint = AutomaticHashConstraint,
-            resolveStatePointers: Boolean = false
+            constraint: AttachmentConstraint = AutomaticHashConstraint
     ): TransactionBuilder {
         checkNotNull(notary) {
             "Need to specify a notary for the state, or set a default one on TransactionBuilder initialisation"
         }
-        addOutputState(state, contract, notary!!, constraint = constraint, resolveStatePointers = resolveStatePointers)
+        addOutputState(state, contract, notary!!, constraint = constraint)
         return this
     }
 
