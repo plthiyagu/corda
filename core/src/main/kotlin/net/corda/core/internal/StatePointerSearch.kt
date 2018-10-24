@@ -33,16 +33,21 @@ class StatePointerSearch(val state: ContractState) {
 
     private fun handleField(obj: Any, field: Field) {
         // TODO: There are probably other edge cases, security issues which need handling.
-        println("package: " + field.type.`package`.name)
         when {
+            // StatePointer.
             field.type == LinearPointer::class.java -> statePointers.add(field.get(obj) as LinearPointer)
             field.type == StaticPointer::class.java -> statePointers.add(field.get(obj) as StaticPointer)
-            // Ignore classes which have not been loaded.
-            // Assumption is that all required state classes are already loaded.
-            field.type.`package` == null -> return
-            // Ignore JDK classes.
-            field.type.`package`.name.startsWith("java") -> return
+            // Not StatePointer.
             else -> {
+                // Ignore classes which have not been loaded.
+                // Assumption: all required state classes are already loaded.
+                val packageName = field.type.`package`?.name ?: return
+
+                // Ignore JDK classes.
+                if (packageName.startsWith("java")) {
+                    return
+                }
+
                 // Ignore nulls.
                 val newObj = field.get(obj) ?: return
                 fieldQueue.addAllFields(newObj)
