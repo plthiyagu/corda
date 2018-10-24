@@ -824,7 +824,7 @@ abstract class AbstractNode<S>(val configuration: NodeConfiguration,
         val compositeKeyAlias = "$DISTRIBUTED_NOTARY_ALIAS_PREFIX-composite-key"
 
         val signingCertificateStore = configuration.signingCertificateStore.get()
-        val certificates = if (!cryptoService.containsKey(compositeKeyAlias)) {
+        val certificates = if (cryptoService.containsKey(compositeKeyAlias)) {
             val certificate = signingCertificateStore[compositeKeyAlias]
             // We have to create the certificate chain for the composite key manually, this is because we don't have a keystore
             // provider that understand compositeKey-privateKey combo. The cert chain is created using the composite key certificate +
